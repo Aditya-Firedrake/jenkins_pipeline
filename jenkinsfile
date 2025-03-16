@@ -1,0 +1,98 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'nginx-app'
+        IMAGE_TAG = 'latest'
+        DOCKER_REGISTRY = 'docker.io'  // Set this to your Docker registry (e.g., Docker Hub, AWS ECR, etc.)
+        DOCKER_REPO = 'my-repo/nginx-app'  // Replace with your Docker repo
+        NGINX_CONF_PATH = './nginx.conf'  // Path to your custom Nginx configuration (if any)
+        APP_DIR = './app'  // Path to your web application files (HTML, CSS, JS, etc.)
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout code from Git repository
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image for Nginx') {
+            steps {
+                script {
+                    // If you have a custom Nginx configuration, it will be copied during the build
+                    if (fileExists("${NGINX_CONF_PATH}")) {
+                        echo "Using custom Nginx configuration"
+                    } else {
+                        echo "Using default Nginx configuration"
+                    }
+
+                    // Build Docker image for Nginx
+                    sh '''
+                        docker build -t ${DOCKER_REGISTRY}/${DOCKER_REPO}:${IMAGE_TAG} .
+                    '''
+                }
+            }
+        }
+
+        stage('Run Docker Container for Nginx') {
+            steps {
+                script {
+                    // Stop and remove any running Nginx containers
+                    sh '''
+                        docker ps -q -f "name=${IMAGE_NAME}" | xargs -r docker stop
+                        docker ps -a -q -f "name=${IMAGE_NAME}" | xargs -r docker rm
+                    '''
+                    
+                    // Run the Nginx container
+                    sh '''
+                        docker run -d -p 80:80 --name ${IMAGE_NAME} ${DOCKER_REGISTRY}/${DOCKER_REPO}:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Nginx Deployment') {
+            steps {
+                script {
+                    // Verify that Nginx is running and serving content
+                    def result = sh(script: 'curl -s -o /dev/null -w "%{http_code}" http://localhost:80', returnStdout: true).trim()
+                    
+                    if (result == '200') {
+                        echo "Nginx is serving content successfully."
+                    } else {
+                        error "Failed to deploy Nginx. HTTP Status: ${result}"
+                    }
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            steps {
+                script {
+                    // Optionally clean up Docker containers and images
+                    sh '''
+                        docker ps -q -f "name=${IMAGE_NAME}" | xargs -r docker stop
+                        docker ps -a -q -f "name=${IMAGE_NAME}" | xargs -r docker rm
+                        docker images -q ${DOCKER_REGISTRY}/${DOCKER_REPO}:${IMAGE_TAG} | xargs -r docker rmi
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline execution complete'
+        }
+
+        success {
+            echo 'Nginx deployment successful'
+        }
+
+        failure {
+            echo 'Nginx deployment failed'
+        }
+    }
+}
